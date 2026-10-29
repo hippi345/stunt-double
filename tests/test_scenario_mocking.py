@@ -155,13 +155,11 @@ class TestSequenceAcrossCalls:
         assert [mock(amount=1)["id"] for _ in range(3)] == ["INV-001", "INV-002", "INV-003"]
 
     def test_each_run_starts_fresh(self):
-        """Separate factory instances (registrations) do not share sequence state."""
-        first_factory = DataDrivenMockFactory("create_invoice")
-        first = first_factory(self.MD)
+        factory = DataDrivenMockFactory("create_invoice")
+        first = factory(self.MD)
         first(amount=1)
         first(amount=1)
-        second_factory = DataDrivenMockFactory("create_invoice")
-        second = second_factory(self.MD)
+        second = factory(self.MD)
         assert second(amount=1)["id"] == "INV-001"
 
     def test_prefixes_count_separately(self):

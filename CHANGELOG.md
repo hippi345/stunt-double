@@ -48,8 +48,10 @@ file records notable unreleased changes and the initial release.
   Internal `TypeError` exceptions raised inside 2-argument factory functions are
   preserved rather than triggering a fallback to 1-argument invocation (#79).
 - **`{{sequence('X')}}` in data-driven mocks**: counters now persist across tool calls
-  for a registered data-driven mock (including through `create_mockable_tool_wrapper`),
-  instead of restarting at `001` on every call (#81).
+  within a run (keyed by `configurable.thread_id`, or `run_id`), including through
+  `create_mockable_tool_wrapper`, instead of restarting at `001` on every call. Separate
+  runs on the same registry count independently, and `DataDrivenMockFactory.reset_sequences()`
+  clears stored run state (#81).
 - **stdio transport hangs**: the MCP client now drains the subprocess `stderr`
   pipe on a background thread, so a server that logs verbosely can no longer
   deadlock the client by filling the OS pipe buffer.

@@ -38,6 +38,7 @@ class TestCreateMockableToolWrapper:
         tool_name: str = "test_tool",
         tool_args: dict | None = None,
         scenario_metadata: dict | None = None,
+        thread_id: str | None = None,
     ):
         """Create a mock ToolCallRequest using native LangGraph types."""
         from langgraph.prebuilt.tool_node import ToolCallRequest
@@ -51,6 +52,8 @@ class TestCreateMockableToolWrapper:
         config = {}
         if scenario_metadata is not None:
             config = {"configurable": {"scenario_metadata": scenario_metadata}}
+            if thread_id is not None:
+                config["configurable"]["thread_id"] = thread_id
 
         tool = MagicMock()
         tool.name = tool_name
@@ -857,6 +860,7 @@ class TestSequenceThroughWrapper:
                 tool_name="create_invoice",
                 tool_args={"amount": 1},
                 scenario_metadata=self.MD,
+                thread_id="run-1",
             )
             result = run_async(wrapper(request, mock_execute))
             assert isinstance(result, ToolMessage)
@@ -890,6 +894,7 @@ class TestSequenceThroughWrapper:
                 tool_name=tool_name,
                 tool_args={},
                 scenario_metadata=md,
+                thread_id="run-1",
             )
             result = run_async(wrapper(request, mock_execute))
             return json.loads(result.content)["id"]
@@ -923,6 +928,7 @@ class TestSequenceThroughWrapper:
                 tool_name="create_invoice",
                 tool_args={},
                 scenario_metadata=md,
+                thread_id="run-1",
             )
             result = run_async(registry_wrapper(request, mock_execute))
             return json.loads(result.content)["id"]
@@ -930,6 +936,72 @@ class TestSequenceThroughWrapper:
         assert invoke(wrapper_one) == "INV-001"
         assert invoke(wrapper_one) == "INV-002"
         assert invoke(wrapper_two) == "INV-001"
+
+    def test_runs_on_shared_registry_count_independently(self):
+        """Interleaved runs (different thread_ids) on one registry each start at 001."""
+        from stuntdouble import MockToolsRegistry
+        from stuntdouble.wrapper import create_mockable_tool_wrapper
+
+        registry = MockToolsRegistry()
+        registry.register_data_driven("create_invoice")
+        wrapper = create_mockable_tool_wrapper(registry)
+
+        async def mock_execute(req):
+            raise AssertionError("Execute should not be called")
+
+        helper = TestCreateMockableToolWrapper()
+
+        def invoke(thread_id: str) -> str:
+            request = helper._create_request(
+                tool_name="create_invoice",
+                tool_args={"amount": 1},
+                scenario_metadata=self.MD,
+                thread_id=thread_id,
+            )
+            return json.loads(run_async(wrapper(request, mock_execute)).content)["id"]
+
+        run_a = [invoke("run-a")]
+        run_b = [invoke("run-b")]
+        run_a.append(invoke("run-a"))
+        run_b.append(invoke("run-b"))
+
+        assert run_a == ["INV-001", "INV-002"]
+        assert run_b == ["INV-001", "INV-002"]
+
+    def test_concurrent_runs_on_shared_registry_count_independently(self):
+        """Runs executing concurrently on one registry do not share counters."""
+        from stuntdouble import MockToolsRegistry
+        from stuntdouble.wrapper import create_mockable_tool_wrapper
+
+        registry = MockToolsRegistry()
+        registry.register_data_driven("create_invoice")
+        wrapper = create_mockable_tool_wrapper(registry)
+
+        async def mock_execute(req):
+            raise AssertionError("Execute should not be called")
+
+        helper = TestCreateMockableToolWrapper()
+
+        async def one_call(thread_id: str) -> str:
+            request = helper._create_request(
+                tool_name="create_invoice",
+                tool_args={"amount": 1},
+                scenario_metadata=self.MD,
+                thread_id=thread_id,
+            )
+            result = await wrapper(request, mock_execute)
+            await asyncio.sleep(0)
+            return json.loads(result.content)["id"]
+
+        async def run(thread_id: str) -> list[str]:
+            return [await one_call(thread_id) for _ in range(2)]
+
+        async def both():
+            return await asyncio.gather(run("run-a"), run("run-b"))
+
+        run_a, run_b = run_async(both())
+        assert run_a == ["INV-001", "INV-002"]
+        assert run_b == ["INV-001", "INV-002"]
 
 
 class TestDefaultRegistryAndWrapper:
