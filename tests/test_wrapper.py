@@ -5,6 +5,7 @@ Tests the mockable tool wrapper factory and its behavior.
 """
 
 import asyncio
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -828,6 +829,107 @@ class TestConfigPassingToMockFactory:
 
         assert "alice" in result.content
         assert "Hello" in result.content
+
+
+class TestSequenceThroughWrapper:
+    """{{sequence('X')}} advances across wrapper tool calls (#81)."""
+
+    MD = {"mocks": {"create_invoice": [{"output": {"id": "{{sequence('INV')}}"}}]}}
+
+    def test_sequence_advances_across_resolve_calls(self):
+        """Three wrapper invocations yield INV-001, INV-002, INV-003."""
+        from langchain_core.messages import ToolMessage
+
+        from stuntdouble import MockToolsRegistry
+        from stuntdouble.wrapper import create_mockable_tool_wrapper
+
+        registry = MockToolsRegistry()
+        registry.register_data_driven("create_invoice")
+        wrapper = create_mockable_tool_wrapper(registry)
+
+        ids: list[str] = []
+
+        async def mock_execute(req):
+            raise AssertionError("Execute should not be called")
+
+        for _ in range(3):
+            request = TestCreateMockableToolWrapper()._create_request(
+                tool_name="create_invoice",
+                tool_args={"amount": 1},
+                scenario_metadata=self.MD,
+            )
+            result = run_async(wrapper(request, mock_execute))
+            assert isinstance(result, ToolMessage)
+            ids.append(json.loads(result.content)["id"])
+
+        assert ids == ["INV-001", "INV-002", "INV-003"]
+
+    def test_separate_tools_have_independent_counters(self):
+        """Different tools registered on the same registry count separately."""
+        from stuntdouble import MockToolsRegistry
+        from stuntdouble.wrapper import create_mockable_tool_wrapper
+
+        md = {
+            "mocks": {
+                "tool_a": [{"output": {"id": "{{sequence('X')}}"}}],
+                "tool_b": [{"output": {"id": "{{sequence('X')}}"}}],
+            }
+        }
+        registry = MockToolsRegistry()
+        registry.register_data_driven("tool_a")
+        registry.register_data_driven("tool_b")
+        wrapper = create_mockable_tool_wrapper(registry)
+
+        async def mock_execute(req):
+            raise AssertionError("Execute should not be called")
+
+        helper = TestCreateMockableToolWrapper()
+
+        def invoke(tool_name: str) -> str:
+            request = helper._create_request(
+                tool_name=tool_name,
+                tool_args={},
+                scenario_metadata=md,
+            )
+            result = run_async(wrapper(request, mock_execute))
+            return json.loads(result.content)["id"]
+
+        assert invoke("tool_a") == "X-001"
+        assert invoke("tool_b") == "X-001"
+        assert invoke("tool_a") == "X-002"
+
+    def test_separate_registries_have_independent_counters(self):
+        """Same tool name on different registries does not share sequence state."""
+        from stuntdouble import MockToolsRegistry
+        from stuntdouble.wrapper import create_mockable_tool_wrapper
+
+        md = {"mocks": {"create_invoice": [{"output": {"id": "{{sequence('INV')}}"}}]}}
+
+        registry_one = MockToolsRegistry()
+        registry_one.register_data_driven("create_invoice")
+        wrapper_one = create_mockable_tool_wrapper(registry_one)
+
+        registry_two = MockToolsRegistry()
+        registry_two.register_data_driven("create_invoice")
+        wrapper_two = create_mockable_tool_wrapper(registry_two)
+
+        async def mock_execute(req):
+            raise AssertionError("Execute should not be called")
+
+        helper = TestCreateMockableToolWrapper()
+
+        def invoke(registry_wrapper) -> str:
+            request = helper._create_request(
+                tool_name="create_invoice",
+                tool_args={},
+                scenario_metadata=md,
+            )
+            result = run_async(registry_wrapper(request, mock_execute))
+            return json.loads(result.content)["id"]
+
+        assert invoke(wrapper_one) == "INV-001"
+        assert invoke(wrapper_one) == "INV-002"
+        assert invoke(wrapper_two) == "INV-001"
 
 
 class TestDefaultRegistryAndWrapper:

@@ -92,6 +92,9 @@ class DataDrivenMockFactory:
         self.echo_input = echo_input
         self._matcher = InputMatcher()
         self._resolver = ValueResolver()
+        # Shared for the lifetime of this factory (one registration). resolve() invokes
+        # __call__ on every tool call; reusing this dict keeps {{sequence('X')}} counting.
+        self._sequence_counters: dict[str, int] = {}
 
     def __call__(
         self,
@@ -125,9 +128,7 @@ class DataDrivenMockFactory:
         echo_input = self.echo_input
         tool_name = self.tool_name
         config_data = _extract_config_data(config)
-        # One counter dict per resolved mock (i.e. per run), shared by all its
-        # calls, so {{sequence('X')}} gives X-001, X-002, ... across calls.
-        sequence_counters: dict[str, int] = {}
+        sequence_counters = self._sequence_counters
 
         def mock_callable(**kwargs: Any) -> Any:
             context = ResolverContext(input_data=kwargs, config_data=config_data, sequence_counters=sequence_counters)
